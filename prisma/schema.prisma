@@ -1,0 +1,278 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --------------------------------------------------------
+// ENUMS
+// --------------------------------------------------------
+
+enum UserRole {
+  student
+  teacher
+  admin
+}
+
+enum BillingStatus {
+  Pending
+  Paid
+  Overdue
+  Reviewing
+}
+
+enum AttendanceStatus {
+  Present
+  Absent
+  Late
+  Excused
+}
+
+enum NotificationType {
+  Global
+  Targeted
+}
+
+enum TicketStatus {
+  Reviewing
+  Approved
+  Rejected
+}
+
+enum ApplicationStatus {
+  pending
+  approved
+  rejected
+}
+
+// --------------------------------------------------------
+// BETTER AUTH MODELS
+// --------------------------------------------------------
+
+/// Core Better Auth user identity
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false) @map("email_verified")
+  image         String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at")
+  role          String?   @default("student")
+
+  sessions      Session[]
+  accounts      Account[]
+  profile       Profile?
+
+  @@map("user")
+}
+
+/// Active user sessions and tokens
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime @map("expires_at")
+  token     String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+/// Authentication credentials and linked accounts (passwords stored here)
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String    @map("account_id")
+  providerId            String    @map("provider_id")
+  userId                String    @map("user_id")
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?   @map("access_token")
+  refreshToken          String?   @map("refresh_token")
+  idToken               String?   @map("id_token")
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at")
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at")
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@map("account")
+}
+
+/// Email verification, password reset tokens
+model Verification {
+  id         String    @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime  @map("expires_at")
+  createdAt  DateTime? @default(now()) @map("created_at")
+  updatedAt  DateTime? @default(now()) @updatedAt @map("updated_at")
+
+  @@map("verification")
+}
+
+// --------------------------------------------------------
+// ACADEMY DOMAIN MODELS
+// --------------------------------------------------------
+
+/// Academy user profile linked 1:1 with Better Auth User
+model Profile {
+  id                 String    @id // Synchronized with User.id
+  user               User      @relation(fields: [id], references: [id], onDelete: Cascade)
+  name               String
+  email              String    @unique
+  role               UserRole  @default(student)
+  whatsapp           String?
+  bio                String?
+  specializations    String[]  @default([])
+  qualification      String?
+  experienceYears    Int?      @default(0) @map("experience_years")
+  isProfileComplete  Boolean   @default(false) @map("is_profile_complete")
+  profilePhotoUrl    String?   @map("profile_photo_url")
+  lastActive         DateTime? @map("last_active")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  // Relations
+  studentProfile     Student?     @relation("StudentProfile")
+  teacherStudents    Student[]    @relation("TeacherStudents")
+  markedAttendances  Attendance[] @relation("MarkedAttendances")
+
+  @@map("profiles")
+}
+
+/// Student academic profile and enrollment tracking
+model Student {
+  id                 String    @id @default(uuid())
+  profileId          String?   @unique @map("profile_id")
+  profile            Profile?  @relation("StudentProfile", fields: [profileId], references: [id], onDelete: Cascade)
+  teacherId          String?   @map("teacher_id")
+  teacher            Profile?  @relation("TeacherStudents", fields: [teacherId], references: [id], onDelete: SetNull)
+  studentName        String    @map("student_name")
+  parentName         String?   @map("parent_name")
+  course             String?
+  enrolled           Boolean   @default(false)
+  progress           Int       @default(0)
+  lastAssignment     String?   @map("last_assignment")
+  liveClassroomLink  String?   @map("live_classroom_link")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  // Relations
+  billing            Billing?
+  attendances        Attendance[]
+  notifications      Notification[]
+  paymentTickets     PaymentTicket[]
+
+  @@index([teacherId])
+  @@map("students")
+}
+
+/// Student tuition invoice and billing lifecycle
+model Billing {
+  id              String        @id @default(uuid())
+  studentId       String        @unique @map("student_id")
+  student         Student       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  amountDue       String        @default("3000 PKR") @map("amount_due")
+  status          BillingStatus @default(Pending)
+  lastPaymentDate DateTime?     @map("last_payment_date")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @default(now()) @updatedAt @map("updated_at")
+
+  @@map("billing")
+}
+
+/// Daily session attendance logs
+model Attendance {
+  id          String           @id @default(uuid())
+  studentId   String           @map("student_id")
+  student     Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  date        DateTime         @default(now()) @db.Date
+  status      AttendanceStatus
+  markedById  String?          @map("marked_by")
+  markedBy    Profile?         @relation("MarkedAttendances", fields: [markedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([studentId, date])
+  @@index([studentId, date])
+  @@index([date])
+  @@map("attendance")
+}
+
+/// Announcements and targeted notifications
+model Notification {
+  id              String           @id @default(uuid())
+  title           String
+  text            String
+  type            NotificationType
+  targetStudentId String?          @map("target_student_id")
+  student         Student?         @relation(fields: [targetStudentId], references: [id], onDelete: Cascade)
+  publisherRole   String           @map("publisher_role")
+  isActive        Boolean          @default(true) @map("is_active")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @default(now()) @updatedAt @map("updated_at")
+
+  @@index([isActive, type])
+  @@index([targetStudentId])
+  @@map("notifications")
+}
+
+/// Manual payment proof submissions for admin review
+model PaymentTicket {
+  id            String       @id @default(uuid())
+  studentId     String       @map("student_id")
+  student       Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  transactionId String       @unique @map("transaction_id")
+  methodUsed    String       @map("method_used")
+  status        TicketStatus @default(Reviewing)
+  submittedAt   DateTime     @default(now()) @map("submitted_at")
+  resolvedAt    DateTime?    @map("resolved_at")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @default(now()) @updatedAt @map("updated_at")
+
+  @@index([studentId, status])
+  @@map("payment_tickets")
+}
+
+/// Academy course offerings
+model Course {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("courses")
+}
+
+/// Prospective instructor applications submitted via /teach portal
+model TeacherApplication {
+  id              String            @id @default(uuid())
+  name            String
+  email           String            @unique
+  whatsapp        String
+  country         String?
+  qualification   String
+  specializations String[]          @default([])
+  experienceYears Int               @default(0) @map("experience_years")
+  bio             String?
+  status          ApplicationStatus @default(pending)
+  adminNotes      String?           @map("admin_notes")
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @default(now()) @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@map("teacher_applications")
+}
